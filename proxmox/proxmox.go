@@ -1,12 +1,25 @@
 package proxmox
 
 import (
+	"crypto/tls"
+
+	api "github.com/Telmate/proxmox-api-go/proxmox"
 	"github.com/rancher/machine/libmachine/drivers"
 	"github.com/rancher/machine/libmachine/mcnflag"
 	"github.com/rancher/machine/libmachine/state"
 )
 
-type Driver struct{}
+const DriverName = "proxmox"
+
+type Driver struct {
+	ApiUrl            string
+	Username          string
+	Password          string
+	TwoFactorAuthCode string
+	Insecure          bool
+	Timeout           int
+	client            *api.Client
+}
 
 func NewDriver() drivers.Driver {
 	return &Driver{}
@@ -16,10 +29,10 @@ func (d *Driver) Create() error {
 	return nil
 }
 func (d *Driver) DriverName() string {
-	return ""
+	return DriverName
 }
 func (d *Driver) GetCreateFlags() []mcnflag.Flag {
-	return []mcnflag.Flag{}
+	return flags
 }
 func (d *Driver) GetIP() (string, error) {
 	return "", nil
@@ -58,11 +71,29 @@ func (d *Driver) Restart() error {
 	return nil
 }
 func (d *Driver) SetConfigFromFlags(opts drivers.DriverOptions) error {
-	return nil
+	d.ApiUrl = opts.String("proxmox-api-url")
+	d.Username = opts.String("proxmox-username")
+	d.Password = opts.String("proxmox-password")
+	d.TwoFactorAuthCode = opts.String("proxmox-2fa-code")
+	d.Insecure = opts.Bool("proxmox-insecure")
+
+	return d.login()
 }
 func (d *Driver) Start() error {
 	return nil
 }
 func (d *Driver) Stop() error {
 	return nil
+}
+
+func (d *Driver) login() (err error) {
+	d.client, err = api.NewClient(d.ApiUrl, nil, &tls.Config{
+		InsecureSkipVerify: d.Insecure,
+	}, d.Timeout)
+
+	if err != nil {
+		return err
+	}
+
+	return d.client.Login(d.Username, d.Password, d.TwoFactorAuthCode)
 }
