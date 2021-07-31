@@ -34,4 +34,9 @@ var flags = []mcnflag.Flag{
 		Usage:  "API timeout in seconds",
 		Value:  30,
 	},
+	mcnflag.IntFlag{
+		EnvVar: "PROXMOX_TEMPLATE_ID",
+		Name:   "proxmox-template-id",
+		Usage:  "Id of the template to clone from",
+	},
 }

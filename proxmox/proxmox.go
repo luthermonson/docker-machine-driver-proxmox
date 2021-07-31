@@ -2,6 +2,7 @@ package proxmox
 
 import (
 	"crypto/tls"
+	"fmt"
 
 	api "github.com/Telmate/proxmox-api-go/proxmox"
 	"github.com/rancher/machine/libmachine/drivers"
@@ -18,7 +19,9 @@ type Driver struct {
 	TwoFactorAuthCode string
 	Insecure          bool
 	Timeout           int
-	client            *api.Client
+	TemplateId        int
+
+	client *api.Client
 }
 
 func NewDriver() drivers.Driver {
@@ -62,6 +65,22 @@ func (d *Driver) Kill() error {
 	return nil
 }
 func (d *Driver) PreCreateCheck() error {
+	if d.client == nil {
+		return fmt.Errorf("no api client was created and we can not communicate with proxmox")
+	}
+
+	if d.TemplateId == 0 {
+		return fmt.Errorf("template id has to be set")
+	}
+
+	vmref := api.NewVmRef(d.TemplateId)
+	vminfo, err := d.client.GetVmInfo(vmref)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(vminfo)
+
 	return nil
 }
 func (d *Driver) Remove() error {
@@ -76,6 +95,7 @@ func (d *Driver) SetConfigFromFlags(opts drivers.DriverOptions) error {
 	d.Password = opts.String("proxmox-password")
 	d.TwoFactorAuthCode = opts.String("proxmox-2fa-code")
 	d.Insecure = opts.Bool("proxmox-insecure")
+	d.TemplateId = opts.Int("proxmox-template-id")
 
 	return d.login()
 }
