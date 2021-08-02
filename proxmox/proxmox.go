@@ -3,8 +3,9 @@ package proxmox
 import (
 	"crypto/tls"
 	"fmt"
+	"net/http"
 
-	api "github.com/Telmate/proxmox-api-go/proxmox"
+	"github.com/luthermonson/go-proxmox"
 	"github.com/rancher/machine/libmachine/drivers"
 	"github.com/rancher/machine/libmachine/mcnflag"
 	"github.com/rancher/machine/libmachine/state"
@@ -13,6 +14,8 @@ import (
 const DriverName = "proxmox"
 
 type Driver struct {
+	*drivers.BaseDriver
+	client            *proxmox.Client
 	ApiUrl            string
 	Username          string
 	Password          string
@@ -20,8 +23,9 @@ type Driver struct {
 	Insecure          bool
 	Timeout           int
 	TemplateId        int
-
-	client *api.Client
+	TemplateNode      string
+	TokenID           string
+	Secret            string
 }
 
 func NewDriver() drivers.Driver {
@@ -29,66 +33,71 @@ func NewDriver() drivers.Driver {
 }
 
 func (d *Driver) Create() error {
+
 	return nil
 }
+
 func (d *Driver) DriverName() string {
 	return DriverName
 }
+
 func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 	return flags
 }
-func (d *Driver) GetIP() (string, error) {
-	return "", nil
-}
-func (d *Driver) GetMachineName() string {
-	return ""
-}
+
 func (d *Driver) GetSSHHostname() (string, error) {
 	return "", nil
 }
-func (d *Driver) GetSSHKeyPath() string {
-	return ""
-}
-func (d *Driver) GetSSHPort() (int, error) {
-	return 0, nil
-}
-func (d *Driver) GetSSHUsername() string {
-	return ""
-}
+
 func (d *Driver) GetURL() (string, error) {
 	return "", nil
 }
+
 func (d *Driver) GetState() (state.State, error) {
 	return state.None, nil
 }
+
 func (d *Driver) Kill() error {
 	return nil
 }
+
 func (d *Driver) PreCreateCheck() error {
 	if d.client == nil {
-		return fmt.Errorf("no api client was created and we can not communicate with proxmox")
+		return fmt.Errorf("no api client was created")
+	}
+
+	if d.TemplateNode == "" {
+		return fmt.Errorf("template node has to be set")
+	}
+	node, err := d.client.Node(d.TemplateNode)
+	if err != nil {
+		return err
 	}
 
 	if d.TemplateId == 0 {
 		return fmt.Errorf("template id has to be set")
 	}
 
-	vmref := api.NewVmRef(d.TemplateId)
-	vminfo, err := d.client.GetVmInfo(vmref)
+	vm, err := node.VirtualMachine(d.TemplateId)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println(vminfo)
+	if !vm.Template {
+		return fmt.Errorf("virtual machine id %d was not a template", d.TemplateId)
+	}
 
 	return nil
 }
+
 func (d *Driver) Remove() error {
 	return nil
 }
+
 func (d *Driver) Restart() error {
 	return nil
 }
+
 func (d *Driver) SetConfigFromFlags(opts drivers.DriverOptions) error {
 	d.ApiUrl = opts.String("proxmox-api-url")
 	d.Username = opts.String("proxmox-username")
@@ -96,24 +105,42 @@ func (d *Driver) SetConfigFromFlags(opts drivers.DriverOptions) error {
 	d.TwoFactorAuthCode = opts.String("proxmox-2fa-code")
 	d.Insecure = opts.Bool("proxmox-insecure")
 	d.TemplateId = opts.Int("proxmox-template-id")
+	d.TemplateNode = opts.String("proxmox-template-node")
+	d.TokenID = opts.String("proxmox-tokenid")
+	d.Secret = opts.String("proxmox-secret")
+	d.client = d.proxmoxClient()
+	_, err := d.client.Version() // get version info to verify credentials
 
-	return d.login()
+	return err
 }
+
 func (d *Driver) Start() error {
 	return nil
 }
+
 func (d *Driver) Stop() error {
 	return nil
 }
 
-func (d *Driver) login() (err error) {
-	d.client, err = api.NewClient(d.ApiUrl, nil, &tls.Config{
-		InsecureSkipVerify: d.Insecure,
-	}, d.Timeout)
-
-	if err != nil {
-		return err
+func (d *Driver) proxmoxClient() *proxmox.Client {
+	var options []proxmox.Option
+	if d.Insecure {
+		options = append(options, proxmox.WithClient(&http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		}))
 	}
 
-	return d.client.Login(d.Username, d.Password, d.TwoFactorAuthCode)
+	if d.TokenID != "" && d.Secret != "" {
+		options = append(options, proxmox.WithAPIToken(d.TokenID, d.Secret))
+	}
+
+	if d.Username != "" && d.Password != "" {
+		options = append(options, proxmox.WithLogins(d.Username, d.Password))
+	}
+
+	return proxmox.NewClient(d.ApiUrl, options...)
 }
