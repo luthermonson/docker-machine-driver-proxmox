@@ -2,11 +2,14 @@ package proxmox
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/luthermonson/go-proxmox"
 	"github.com/rancher/machine/libmachine/drivers"
+	"github.com/rancher/machine/libmachine/log"
 	"github.com/rancher/machine/libmachine/mcnflag"
 	"github.com/rancher/machine/libmachine/state"
 )
@@ -15,7 +18,12 @@ const DriverName = "proxmox"
 
 type Driver struct {
 	*drivers.BaseDriver
-	client            *proxmox.Client
+	client   *proxmox.Client
+	ID       int
+	node     *proxmox.Node
+	template *proxmox.VirtualMachine
+	vm       *proxmox.VirtualMachine
+
 	ApiUrl            string
 	Username          string
 	Password          string
@@ -23,7 +31,7 @@ type Driver struct {
 	Insecure          bool
 	Timeout           int
 	TemplateId        int
-	TemplateNode      string
+	Node              string
 	TokenID           string
 	Secret            string
 }
@@ -33,6 +41,24 @@ func NewDriver() drivers.Driver {
 }
 
 func (d *Driver) Create() error {
+	if d.node == nil || d.template == nil {
+		return errors.New("node and template required")
+	}
+
+	newid, task, err := d.template.Clone(d.MachineName, d.Node)
+	if err != nil {
+		return err
+	}
+
+	if err := task.Wait(1*time.Second, 10*time.Second); err != nil {
+		return err
+	}
+
+	d.ID = newid
+	d.vm, err = d.node.VirtualMachine(d.ID)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -66,32 +92,28 @@ func (d *Driver) PreCreateCheck() error {
 		return fmt.Errorf("no api client was created")
 	}
 
-	if d.TemplateNode == "" {
+	if d.Node == "" {
 		return fmt.Errorf("template node has to be set")
 	}
-	node, err := d.client.Node(d.TemplateNode)
-	if err != nil {
-		return err
-	}
 
-	if d.TemplateId == 0 {
-		return fmt.Errorf("template id has to be set")
-	}
-
-	vm, err := node.VirtualMachine(d.TemplateId)
-	if err != nil {
-		return err
-	}
-
-	if !vm.Template {
-		return fmt.Errorf("virtual machine id %d was not a template", d.TemplateId)
-	}
-
-	return nil
+	return d.setup()
 }
 
 func (d *Driver) Remove() error {
-	return nil
+	if err := d.setup(); err != nil {
+		return err
+	}
+
+	if d.vm == nil {
+		return nil
+	}
+
+	task, err := d.vm.Delete()
+	if err != nil {
+		return err
+	}
+
+	return task.Wait(1*time.Second, 30*time.Second)
 }
 
 func (d *Driver) Restart() error {
@@ -99,13 +121,13 @@ func (d *Driver) Restart() error {
 }
 
 func (d *Driver) SetConfigFromFlags(opts drivers.DriverOptions) error {
-	d.ApiUrl = opts.String("proxmox-api-url")
+	d.ApiUrl = opts.String("proxmox-url")
 	d.Username = opts.String("proxmox-username")
 	d.Password = opts.String("proxmox-password")
 	d.TwoFactorAuthCode = opts.String("proxmox-2fa-code")
 	d.Insecure = opts.Bool("proxmox-insecure")
 	d.TemplateId = opts.Int("proxmox-template-id")
-	d.TemplateNode = opts.String("proxmox-template-node")
+	d.Node = opts.String("proxmox-node")
 	d.TokenID = opts.String("proxmox-tokenid")
 	d.Secret = opts.String("proxmox-secret")
 	d.client = d.proxmoxClient()
@@ -143,4 +165,37 @@ func (d *Driver) proxmoxClient() *proxmox.Client {
 	}
 
 	return proxmox.NewClient(d.ApiUrl, options...)
+}
+
+func (d *Driver) setup() (err error) {
+	if d.client == nil {
+		d.client = d.proxmoxClient()
+	}
+
+	log.Debugf("finding node: %s", d.Node)
+	d.node, err = d.client.Node(d.Node)
+	if err != nil {
+		return err
+	}
+
+	log.Debugf("finding template: %d", d.TemplateId)
+	if d.TemplateId == 0 {
+		return fmt.Errorf("template id has to be set")
+	}
+
+	d.template, err = d.node.VirtualMachine(d.TemplateId)
+	if err != nil {
+		return err
+	}
+
+	if d.ID == 0 {
+		return nil
+	}
+
+	d.vm, err = d.node.VirtualMachine(d.ID)
+	if err != nil {
+		return err
+	}
+
+	return err
 }

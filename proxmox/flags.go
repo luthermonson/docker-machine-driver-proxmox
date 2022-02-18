@@ -4,8 +4,8 @@ import "github.com/rancher/machine/libmachine/mcnflag"
 
 var flags = []mcnflag.Flag{
 	mcnflag.StringFlag{
-		EnvVar: "PROXMOX_API_URL",
-		Name:   "proxmox-api-url",
+		EnvVar: "PROXMOX_URL",
+		Name:   "proxmox-url",
 		Usage:  "URL to the proxmox API Server",
 	},
 	mcnflag.StringFlag{
@@ -45,8 +45,8 @@ var flags = []mcnflag.Flag{
 		Value:  30,
 	},
 	mcnflag.StringFlag{
-		EnvVar: "PROXMOX_TEMPLATE_NODE",
-		Name:   "proxmox-template-node",
+		EnvVar: "PROXMOX_NODE",
+		Name:   "proxmox-node",
 		Usage:  "Node name the template is on",
 	},
 	mcnflag.IntFlag{
