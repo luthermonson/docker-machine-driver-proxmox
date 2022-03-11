@@ -50,7 +50,7 @@ func (d *Driver) Create() error {
 		return err
 	}
 
-	if err := task.Wait(1*time.Second, 10*time.Second); err != nil {
+	if err := task.WaitFor(10); err != nil {
 		return err
 	}
 
@@ -60,7 +60,7 @@ func (d *Driver) Create() error {
 		return err
 	}
 
-	return nil
+	return d.Start()
 }
 
 func (d *Driver) DriverName() string {
@@ -80,11 +80,37 @@ func (d *Driver) GetURL() (string, error) {
 }
 
 func (d *Driver) GetState() (state.State, error) {
+	if err := d.vm.Ping(); err != nil {
+		return state.None, err
+	}
+
+	if d.vm.IsStopped() {
+		return state.Stopped, nil
+	}
+
+	if d.vm.IsRunning() {
+		return state.Running, nil
+	}
+
 	return state.None, nil
 }
 
 func (d *Driver) Kill() error {
-	return nil
+	t, err := d.vm.Stop()
+	if err != nil {
+		return err
+	}
+
+	if err := t.WaitFor(15); err != nil {
+		return err
+	}
+
+	t, err = d.vm.Delete()
+	if err != nil {
+		return err
+	}
+
+	return t.WaitFor(15)
 }
 
 func (d *Driver) PreCreateCheck() error {
@@ -117,7 +143,12 @@ func (d *Driver) Remove() error {
 }
 
 func (d *Driver) Restart() error {
-	return nil
+	t, err := d.vm.Reboot()
+	if err != nil {
+		return err
+	}
+
+	return t.WaitFor(15)
 }
 
 func (d *Driver) SetConfigFromFlags(opts drivers.DriverOptions) error {
@@ -137,11 +168,21 @@ func (d *Driver) SetConfigFromFlags(opts drivers.DriverOptions) error {
 }
 
 func (d *Driver) Start() error {
-	return nil
+	t, err := d.vm.Start()
+	if err != nil {
+		return err
+	}
+
+	return t.WaitFor(15)
 }
 
 func (d *Driver) Stop() error {
-	return nil
+	t, err := d.vm.Stop()
+	if err != nil {
+		return err
+	}
+
+	return t.WaitFor(15)
 }
 
 func (d *Driver) proxmoxClient() *proxmox.Client {
