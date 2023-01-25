@@ -5,16 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
 	"github.com/rancher/machine/libmachine/drivers"
-	"github.com/rancher/machine/libmachine/log"
 	"github.com/rancher/machine/libmachine/mcnflag"
+	"github.com/rancher/machine/libmachine/ssh"
 	"github.com/rancher/machine/libmachine/state"
 )
 
-const DriverName = "proxmox"
+const (
+	DriverName = "proxmox"
+	B2DUser    = "docker"
+)
 
 type Driver struct {
 	*drivers.BaseDriver
@@ -24,6 +28,7 @@ type Driver struct {
 	template *proxmox.VirtualMachine
 	vm       *proxmox.VirtualMachine
 
+	Method            string
 	ApiUrl            string
 	Username          string
 	Password          string
@@ -37,7 +42,11 @@ type Driver struct {
 }
 
 func NewDriver() drivers.Driver {
-	return &Driver{}
+	return &Driver{
+		BaseDriver: &drivers.BaseDriver{
+			SSHUser: B2DUser,
+		},
+	}
 }
 
 func (d *Driver) Create() error {
@@ -45,12 +54,16 @@ func (d *Driver) Create() error {
 		return errors.New("node and template required")
 	}
 
-	newid, task, err := d.template.Clone(d.MachineName, d.Node)
+	newid, task, err := d.template.Clone(&proxmox.VirtualMachineCloneOptions{
+		Name: d.MachineName,
+		Full: 1,
+	})
+
 	if err != nil {
 		return err
 	}
 
-	if err := task.WaitFor(10); err != nil {
+	if err := task.WaitFor(30); err != nil {
 		return err
 	}
 
@@ -60,7 +73,63 @@ func (d *Driver) Create() error {
 		return err
 	}
 
-	return d.Start()
+	if err := ssh.GenerateSSHKey(d.GetSSHKeyPath()); err != nil {
+		return err
+	}
+
+	var starter func() error
+
+	switch d.Method {
+	case "agent":
+		starter = d.startAgent
+	case "drive":
+		starter = d.startDrive
+	case "nocloud":
+		starter = d.startNoCloud
+	default:
+		return fmt.Errorf("method %s is not supported", d.Method)
+	}
+
+	if err := starter(); err != nil {
+		return err
+	}
+
+	return d.waitForIP()
+}
+
+func (d *Driver) waitForIP() error {
+	// todo only supports agent, add more methods to find ip
+	// todo only supports Net0
+	// todo only supports ipv4
+
+	if err := d.vm.WaitForAgent(10); err != nil {
+		return err
+	}
+
+	net := d.vm.VirtualMachineConfig.Net0
+
+RETRY:
+	ifaces, err := d.vm.AgentGetNetworkIFaces()
+	if err != nil {
+		return err
+	}
+
+	for _, iface := range ifaces {
+		if strings.Contains(strings.ToLower(net), strings.ToLower(iface.HardwareAddress)) {
+			for _, ip := range iface.IPAddresses {
+				if ip.IPAddressType == "ipv4" {
+					d.IPAddress = ip.IPAddress
+				}
+			}
+		}
+	}
+
+	if d.IPAddress == "" {
+		time.Sleep(2 * time.Second)
+		goto RETRY
+	}
+
+	return nil
 }
 
 func (d *Driver) DriverName() string {
@@ -72,14 +141,23 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 }
 
 func (d *Driver) GetSSHHostname() (string, error) {
-	return "", nil
+	return d.IPAddress, nil
 }
 
 func (d *Driver) GetURL() (string, error) {
-	return "", nil
+	ip, err := d.GetIP()
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("tcp://%s:2376", ip), nil
 }
 
 func (d *Driver) GetState() (state.State, error) {
+	if err := d.setup(); err != nil {
+		return state.None, err
+	}
+
 	if err := d.vm.Ping(); err != nil {
 		return state.None, err
 	}
@@ -134,12 +212,7 @@ func (d *Driver) Remove() error {
 		return nil
 	}
 
-	task, err := d.vm.Delete()
-	if err != nil {
-		return err
-	}
-
-	return task.Wait(1*time.Second, 30*time.Second)
+	return d.Kill()
 }
 
 func (d *Driver) Restart() error {
@@ -149,22 +222,6 @@ func (d *Driver) Restart() error {
 	}
 
 	return t.WaitFor(15)
-}
-
-func (d *Driver) SetConfigFromFlags(opts drivers.DriverOptions) error {
-	d.ApiUrl = opts.String("proxmox-url")
-	d.Username = opts.String("proxmox-username")
-	d.Password = opts.String("proxmox-password")
-	d.TwoFactorAuthCode = opts.String("proxmox-2fa-code")
-	d.Insecure = opts.Bool("proxmox-insecure")
-	d.TemplateId = opts.Int("proxmox-template-id")
-	d.Node = opts.String("proxmox-node")
-	d.TokenID = opts.String("proxmox-tokenid")
-	d.Secret = opts.String("proxmox-secret")
-	d.client = d.proxmoxClient()
-	_, err := d.client.Version() // get version info to verify credentials
-
-	return err
 }
 
 func (d *Driver) Start() error {
@@ -205,25 +262,26 @@ func (d *Driver) proxmoxClient() *proxmox.Client {
 		options = append(options, proxmox.WithLogins(d.Username, d.Password))
 	}
 
+	options = append(options, proxmox.WithLogger(logger))
 	return proxmox.NewClient(d.ApiUrl, options...)
 }
 
 func (d *Driver) setup() (err error) {
+	if d.TemplateId == 0 {
+		return fmt.Errorf("template id has to be set")
+	}
+
 	if d.client == nil {
 		d.client = d.proxmoxClient()
 	}
 
-	log.Debugf("finding node: %s", d.Node)
+	logger.Debugf("finding node: %s", d.Node)
 	d.node, err = d.client.Node(d.Node)
 	if err != nil {
 		return err
 	}
 
-	log.Debugf("finding template: %d", d.TemplateId)
-	if d.TemplateId == 0 {
-		return fmt.Errorf("template id has to be set")
-	}
-
+	logger.Debugf("finding template: %d", d.TemplateId)
 	d.template, err = d.node.VirtualMachine(d.TemplateId)
 	if err != nil {
 		return err

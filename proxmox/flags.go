@@ -1,8 +1,16 @@
 package proxmox
 
-import "github.com/rancher/machine/libmachine/mcnflag"
+import (
+	"github.com/rancher/machine/libmachine/drivers"
+	"github.com/rancher/machine/libmachine/mcnflag"
+)
 
 var flags = []mcnflag.Flag{
+	mcnflag.StringFlag{
+		EnvVar: "PROXMOX_METHOD",
+		Name:   "proxmox-method",
+		Usage:  "Method to put the ssh credentials from the box: agent (qemu-guest-agent), drive (PVE cloud-init drive), nocloud (cloud-init iso)",
+	},
 	mcnflag.StringFlag{
 		EnvVar: "PROXMOX_URL",
 		Name:   "proxmox-url",
@@ -54,4 +62,21 @@ var flags = []mcnflag.Flag{
 		Name:   "proxmox-template-id",
 		Usage:  "Id of the template to clone from",
 	},
+}
+
+func (d *Driver) SetConfigFromFlags(opts drivers.DriverOptions) error {
+	d.Method = opts.String("proxmox-method")
+	d.ApiUrl = opts.String("proxmox-url")
+	d.Username = opts.String("proxmox-username")
+	d.Password = opts.String("proxmox-password")
+	d.TwoFactorAuthCode = opts.String("proxmox-2fa-code")
+	d.Insecure = opts.Bool("proxmox-insecure")
+	d.TemplateId = opts.Int("proxmox-template-id")
+	d.Node = opts.String("proxmox-node")
+	d.TokenID = opts.String("proxmox-tokenid")
+	d.Secret = opts.String("proxmox-secret")
+	d.client = d.proxmoxClient()
+	_, err := d.client.Version() // get version info to verify credentials
+
+	return err
 }
