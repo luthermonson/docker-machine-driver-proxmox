@@ -1,6 +1,8 @@
 package proxmox
 
 import (
+	"context"
+
 	"github.com/rancher/machine/libmachine/drivers"
 	"github.com/rancher/machine/libmachine/mcnflag"
 )
@@ -76,7 +78,9 @@ func (d *Driver) SetConfigFromFlags(opts drivers.DriverOptions) error {
 	d.TokenID = opts.String("proxmox-tokenid")
 	d.Secret = opts.String("proxmox-secret")
 	d.client = d.proxmoxClient()
-	_, err := d.client.Version() // get version info to verify credentials
+
+	ctx := context.Background()
+	_, err := d.client.Version(ctx) // get version info to verify credentials
 
 	return err
 }
