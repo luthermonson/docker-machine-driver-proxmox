@@ -29,7 +29,7 @@ func (d *Driver) startDrive() error {
 }
 
 func (d *Driver) startNoCloud() error {
-	userData, metaData, err := d.buildCloutInit()
+	userData, metaData, err := d.buildCloudInit()
 	ctx := context.Background()
 	if err != nil {
 		return err
@@ -45,7 +45,7 @@ func (d *Driver) publicSSHKeyPath() string {
 	return d.GetSSHKeyPath() + ".pub"
 }
 
-func (d *Driver) buildCloutInit() (string, string, error) {
+func (d *Driver) buildCloudInit() (string, string, error) {
 	sshkey, err := os.ReadFile(d.publicSSHKeyPath())
 	if err != nil {
 		return "", "", err
