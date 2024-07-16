@@ -1,6 +1,6 @@
 module github.com/luthermonson/docker-machine-driver-proxmox
 
-go 1.19
+go 1.22
 
 require (
 	github.com/luthermonson/go-proxmox v0.1.0
