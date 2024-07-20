@@ -1,6 +1,7 @@
 package proxmox
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -54,7 +55,9 @@ func (d *Driver) Create() error {
 		return errors.New("node and template required")
 	}
 
-	newid, task, err := d.template.Clone(&proxmox.VirtualMachineCloneOptions{
+	ctx := context.Background()
+
+	newid, task, err := d.template.Clone(ctx, &proxmox.VirtualMachineCloneOptions{
 		Name: d.MachineName,
 		Full: 1,
 	})
@@ -63,12 +66,12 @@ func (d *Driver) Create() error {
 		return err
 	}
 
-	if err := task.WaitFor(30); err != nil {
+	if err := task.WaitFor(ctx, 30); err != nil {
 		return err
 	}
 
 	d.ID = newid
-	d.vm, err = d.node.VirtualMachine(d.ID)
+	d.vm, err = d.node.VirtualMachine(ctx, d.ID)
 	if err != nil {
 		return err
 	}
@@ -102,14 +105,16 @@ func (d *Driver) waitForIP() error {
 	// todo only supports Net0
 	// todo only supports ipv4
 
-	if err := d.vm.WaitForAgent(10); err != nil {
+	ctx := context.Background()
+
+	if err := d.vm.WaitForAgent(ctx, 10); err != nil {
 		return err
 	}
 
 	net := d.vm.VirtualMachineConfig.Net0
 
 RETRY:
-	ifaces, err := d.vm.AgentGetNetworkIFaces()
+	ifaces, err := d.vm.AgentGetNetworkIFaces(ctx)
 	if err != nil {
 		return err
 	}
@@ -158,7 +163,9 @@ func (d *Driver) GetState() (state.State, error) {
 		return state.None, err
 	}
 
-	if err := d.vm.Ping(); err != nil {
+	ctx := context.Background()
+
+	if err := d.vm.Ping(ctx); err != nil {
 		return state.None, err
 	}
 
@@ -174,21 +181,23 @@ func (d *Driver) GetState() (state.State, error) {
 }
 
 func (d *Driver) Kill() error {
-	t, err := d.vm.Stop()
+	ctx := context.Background()
+
+	t, err := d.vm.Stop(ctx)
 	if err != nil {
 		return err
 	}
 
-	if err := t.WaitFor(15); err != nil {
+	if err := t.WaitFor(ctx, 15); err != nil {
 		return err
 	}
 
-	t, err = d.vm.Delete()
+	t, err = d.vm.Delete(ctx)
 	if err != nil {
 		return err
 	}
 
-	return t.WaitFor(15)
+	return t.WaitFor(ctx, 15)
 }
 
 func (d *Driver) PreCreateCheck() error {
@@ -216,36 +225,42 @@ func (d *Driver) Remove() error {
 }
 
 func (d *Driver) Restart() error {
-	t, err := d.vm.Reboot()
+	ctx := context.Background()
+
+	t, err := d.vm.Reboot(ctx)
 	if err != nil {
 		return err
 	}
 
-	return t.WaitFor(15)
+	return t.WaitFor(ctx, 15)
 }
 
 func (d *Driver) Start() error {
-	t, err := d.vm.Start()
+	ctx := context.Background()
+
+	t, err := d.vm.Start(ctx)
 	if err != nil {
 		return err
 	}
 
-	return t.WaitFor(15)
+	return t.WaitFor(ctx, 15)
 }
 
 func (d *Driver) Stop() error {
-	t, err := d.vm.Stop()
+	ctx := context.Background()
+
+	t, err := d.vm.Stop(ctx)
 	if err != nil {
 		return err
 	}
 
-	return t.WaitFor(15)
+	return t.WaitFor(ctx, 15)
 }
 
 func (d *Driver) proxmoxClient() *proxmox.Client {
 	var options []proxmox.Option
 	if d.Insecure {
-		options = append(options, proxmox.WithClient(&http.Client{
+		options = append(options, proxmox.WithHTTPClient(&http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
 					InsecureSkipVerify: true,
@@ -259,7 +274,10 @@ func (d *Driver) proxmoxClient() *proxmox.Client {
 	}
 
 	if d.Username != "" && d.Password != "" {
-		options = append(options, proxmox.WithLogins(d.Username, d.Password))
+		options = append(options, proxmox.WithCredentials(&proxmox.Credentials{
+			Username: d.Username,
+			Password: d.Password,
+		}))
 	}
 
 	options = append(options, proxmox.WithLogger(logger))
@@ -276,13 +294,15 @@ func (d *Driver) setup() (err error) {
 	}
 
 	logger.Debugf("finding node: %s", d.Node)
-	d.node, err = d.client.Node(d.Node)
+	ctx := context.Background()
+
+	d.node, err = d.client.Node(ctx, d.Node)
 	if err != nil {
 		return err
 	}
 
 	logger.Debugf("finding template: %d", d.TemplateId)
-	d.template, err = d.node.VirtualMachine(d.TemplateId)
+	d.template, err = d.node.VirtualMachine(ctx, d.TemplateId)
 	if err != nil {
 		return err
 	}
@@ -291,7 +311,7 @@ func (d *Driver) setup() (err error) {
 		return nil
 	}
 
-	d.vm, err = d.node.VirtualMachine(d.ID)
+	d.vm, err = d.node.VirtualMachine(ctx, d.ID)
 	if err != nil {
 		return err
 	}

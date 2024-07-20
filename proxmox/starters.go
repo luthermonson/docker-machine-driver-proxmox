@@ -1,6 +1,7 @@
 package proxmox
 
 import (
+	"context"
 	"errors"
 	"os"
 )
@@ -28,11 +29,12 @@ func (d *Driver) startDrive() error {
 }
 
 func (d *Driver) startNoCloud() error {
-	userData, metaData, err := d.buildCloutInit()
+	userData, metaData, err := d.buildCloudInit()
+	ctx := context.Background()
 	if err != nil {
 		return err
 	}
-	if err := d.vm.CloudInit("scsi1", userData, metaData); err != nil {
+	if err := d.vm.CloudInit(ctx, "scsi1", userData, metaData, "", ""); err != nil {
 		return err
 	}
 
@@ -43,7 +45,7 @@ func (d *Driver) publicSSHKeyPath() string {
 	return d.GetSSHKeyPath() + ".pub"
 }
 
-func (d *Driver) buildCloutInit() (string, string, error) {
+func (d *Driver) buildCloudInit() (string, string, error) {
 	sshkey, err := os.ReadFile(d.publicSSHKeyPath())
 	if err != nil {
 		return "", "", err
@@ -64,5 +66,4 @@ groups:
 `, `instance-id: iid-` + d.MachineName + `
 hostname: ` + d.MachineName + `
 `, nil
-
 }
